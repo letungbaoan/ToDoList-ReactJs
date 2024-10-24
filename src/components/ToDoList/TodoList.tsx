@@ -2,56 +2,86 @@ import { useEffect, useState } from 'react'
 import TaskInput from '../TaskInput'
 import TaskList from '../TaskList'
 import styles from './todoList.module.scss'
-import { Todo } from '../../@types/todo.type'
-
-interface handleNewTodos {
-  (todos: Todo[]): Todo[]
-}
-
-const syncReactToLocal = (handleNewTodos: handleNewTodos) => {
-  const todosString = localStorage.getItem('todos')
-  const todosObj: Todo[] = JSON.parse(todosString || '[]')
-  const newTodosObj = handleNewTodos(todosObj)
-  localStorage.setItem('todos', JSON.stringify(newTodosObj))
-}
+import { AddTodo, Todo } from '../../@types/todo.type'
+import { database } from '../../firebaseConfig'
+import { collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore'
+import { getAuth } from 'firebase/auth'
 
 export default function TodoList() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [currentTodo, setCurrentTodo] = useState<Todo | null>(null)
+  const collectionRef = collection(database, 'todos')
+  const auth = getAuth()
 
   const doneTodos = todos.filter((todo) => todo.done)
   const notDoneTodos = todos.filter((todo) => !todo.done)
 
   useEffect(() => {
-    const todosString = localStorage.getItem('todos')
-    const todosObj: Todo[] = JSON.parse(todosString || '[]')
-    setTodos(todosObj)
+    const loadTodosFromLocalStorage = () => {
+      const localTodosString = localStorage.getItem('todos')
+      if (localTodosString) {
+        const localTodos: Todo[] = JSON.parse(localTodosString)
+        setTodos(localTodos)
+      }
+    }
+
+    loadTodosFromLocalStorage()
+
+    const unsubscribe = onSnapshot(
+      collectionRef,
+      (querySnapshot) => {
+        const todosArray = querySnapshot.docs.map((doc) => {
+          const data = doc.data()
+          return {
+            id: doc.id,
+            name: data.name,
+            done: data.done
+          }
+        })
+        console.log(todosArray)
+        setTodos(todosArray)
+        localStorage.setItem('todos', JSON.stringify(todosArray))
+      },
+      (error) => {
+        console.error('Error getting documents: ', error)
+      }
+    )
+
+    return () => unsubscribe()
   }, [])
 
-  const addTodo = (name: string) => {
-    const handler = (todosObj: Todo[]) => {
-      return [...todosObj, todo]
-    }
-    const todo: Todo = {
-      name,
-      done: false,
-      id: new Date().toISOString()
-    }
-    setTodos((prev) => [...prev, todo])
-    syncReactToLocal(handler)
+  const showAlert = () => {
+    alert('You need to be logged in to make changes! Please sign in to continue.')
   }
 
-  const handleDoneTodo = (id: string, done: boolean) => {
-    const handler = (todoObj: Todo[]) => {
-      return todoObj.map((todo) => {
-        if (todo.id === id) {
-          return { ...todo, done }
-        }
-        return todo
-      })
+  const addTodo = async (name: string) => {
+    if (!auth.currentUser) {
+      showAlert()
+      return
     }
-    setTodos(handler)
-    syncReactToLocal(handler)
+
+    const todo: AddTodo = {
+      name,
+      done: false
+    }
+    await addDoc(collectionRef, todo)
+    const updatedTodos = [...todos, { ...todo, id: Date.now().toString() }]
+    setTodos(updatedTodos)
+    localStorage.setItem('todos', JSON.stringify(updatedTodos))
+  }
+
+  const handleDoneTodo = async (id: string, done: boolean) => {
+    if (!auth.currentUser) {
+      showAlert()
+      return
+    }
+
+    const todoRef = doc(database, 'todos', id)
+    await updateDoc(todoRef, { done })
+
+    const updatedTodos = todos.map((todo) => (todo.id === id ? { ...todo, done } : todo))
+    setTodos(updatedTodos)
+    localStorage.setItem('todos', JSON.stringify(updatedTodos))
   }
 
   const startEditTodo = (id: string) => {
@@ -68,35 +98,40 @@ export default function TodoList() {
     })
   }
 
-  const finishedEditTodo = () => {
-    const handler = (todoObj: Todo[]) => {
-      return todoObj.map((todo) => {
-        if (todo.id === (currentTodo as Todo).id) {
-          return currentTodo as Todo
-        }
-        return todo
-      })
+  const finishedEditTodo = async () => {
+    if (!auth.currentUser) {
+      showAlert()
+      return
     }
-    setTodos(handler)
+
+    if (currentTodo) {
+      const todoRef = doc(database, 'todos', currentTodo.id)
+      await updateDoc(todoRef, { name: currentTodo.name })
+
+      const updatedTodos = todos.map((todo) =>
+        todo.id === currentTodo.id ? { ...todo, name: currentTodo.name } : todo
+      )
+      setTodos(updatedTodos)
+      localStorage.setItem('todos', JSON.stringify(updatedTodos))
+    }
     setCurrentTodo(null)
-    syncReactToLocal(handler)
   }
 
-  const deleteTodo = (id: string) => {
+  const deleteTodo = async (id: string) => {
+    if (!auth.currentUser) {
+      showAlert()
+      return
+    }
+
     if (currentTodo) {
       setCurrentTodo(null)
     }
-    const handler = (todoObj: Todo[]) => {
-      const findedIndexTodo = todoObj.findIndex((todo) => todo.id === id)
-      if (findedIndexTodo > -1) {
-        const result = [...todoObj]
-        result.splice(findedIndexTodo, 1)
-        return result
-      }
-      return todoObj
-    }
-    setTodos(handler)
-    syncReactToLocal(handler)
+    const todoRef = doc(database, 'todos', id)
+    await deleteDoc(todoRef)
+
+    const updatedTodos = todos.filter((todo) => todo.id !== id)
+    setTodos(updatedTodos)
+    localStorage.setItem('todos', JSON.stringify(updatedTodos))
   }
 
   return (

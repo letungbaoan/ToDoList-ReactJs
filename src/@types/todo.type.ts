@@ -3,3 +3,8 @@ export interface Todo {
   done: boolean
   id: string
 }
+
+export interface AddTodo {
+  name: string
+  done: boolean
+}
